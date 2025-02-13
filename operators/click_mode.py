@@ -16,7 +16,8 @@ from ..libs.blender_utils import (
   get_data,
   get_types_object,
   get_operator,
-  active_object_
+  active_object_,
+  get_selected_objects
 )
 
 from ..const import selector_prefix, shape_key_empty_object
@@ -54,51 +55,30 @@ def add_click_mode (shape_key_map, categories):
     return selectors, types
 
   def update_selectors (selectors, ref_image, types):
-    # round(var) -> 1
     def update_driver (selectors, frame):
       for selector in selectors:
         selector.location[0] = ref_image.location[0]
         selector.location[2] = ref_image.location[2]
         # 会触发 depsgraph_update_handler 执行
         selector.select_set(True)
-        # 不激活它，就不会执行 depsgraph_update_handler 中写的其它逻辑
+        # 不激活它，active_object 就会为 None，
+        # 就不会执行 depsgraph_update_handler 中写的其它逻辑
         # active_object_(selector)
         selector_insert_keyframe(selector, frame)
-        
-        # driver = (
-        #   selector.animation_data.drivers.find('location', index = i).driver
-        # )
-        # old_exp = driver.expression
-        # driver.expression = str(o.location[i])
-        # drivers.append(driver)
-        # exps.append(old_exp)
-    
-    # 1 -> round(var)
-    def restore_driver (drivers, exps):
-      for index, driver in enumerate(drivers):
-        driver.expression = exps[index]
           
     def update_shape_key_value (shape_key_map, types, frame):
       for item in types:
         shape_key_insert_keyframe(shape_key_map[item], frame)
 
-    drivers = []
-    exps = []
     ref_image.select_set(False)
     active_object_(None)
-    # types 是开启选中的选择器
-
     frame = get_current_frame()
     update_driver(selectors, frame)
-    # 更新视图，否则形态键插帧时的值是上一次的值
+    # 更新视图，选择器会移动到被点击的图片的位置上，形态键的值就是最新的了
+    # 否则形态键插帧时的值是上一次的值，要等函数执行完，视图更新后，值才会更新
     update_view()
+    # types 是开启选中的选择器
     update_shape_key_value(shape_key_map, types, frame)
-
-    # 更新视图，选择器会移动到被点击的图片的位置上
-    # update_view()
-    # restore_driver(drivers, exps)
-    drivers.clear()
-    exps.clear()
 
   def cb():
     active_object = get_active_object()
@@ -133,8 +113,13 @@ def add_click_mode (shape_key_map, categories):
 # flag = False
 
 def selector_insert_keyframe (selector, frame):
-  selector.keyframe_insert(data_path = "location", index = 0, frame = frame) 
-  selector.keyframe_insert(data_path = "location", index = 2, frame = frame) 
+  list = [0, 2]
+
+  for index in list:
+    selector.keyframe_insert(data_path = "location", index = index, frame = frame) 
+    fcurve = selector.animation_data.action.fcurves.find("location", index = index)
+    keyframe_point = [kp for kp in fcurve.keyframe_points if kp.co[0] == frame][0]
+    keyframe_point.interpolation = 'CONSTANT'
 
 def update_shape_key_value (shape_keys):
   empty_object = get_object_(shape_key_empty_object)
@@ -168,51 +153,75 @@ def _on_depsgraph_update (merged_category_names, shape_key_name):
     active_object = get_active_object()
     active_operator = get_context().active_operator
 
-    # 删除时 active_object 时值变为 None
+    # 删除时， active_object 时值变为 None
     if not active_object or not active_object.name.startswith(selector_prefix):
       on_depsgraph_update.operator = active_operator
 
       return
+    
+    # 点击 selector 时会进入这里，但是 is_updated_transform 值为 False
 
     for update in depsgraph.updates:
       if update.is_updated_transform:
-        # tip1: msgbus 监听 location 时只有点击 ui 或者代码 location[0] = 0 改变值才触发
-        # tip2: 删除关键帧时 is_updated_transform 为 True，但是不会进入任务判断语句内
-
-        # .l 和 .r 同时移动时，其中一个行为和单独移动时相同（假设是 .l），会不断进入
-        # 这里，移动完成后更新 operator，之后 .r 只会更新一次，即 .l 完成移动后
-        # .r 才进入这里，且只进入一次，并且此时 active_operator 就是 .l 移动完成时的 
-        # operator，因此 .r 会进入移动中，所以结尾加上 break，.l 移动时完成 .l 和 .r
-        # 形态键值的更新，.l 移动完成后完成 .l 和 .r 曲线编辑器的更新。
-        # 所以目前只单独移动.l 或 .r 时也会更新另一半
-
-        print(update.id)
-        selector = update.id
-        print(selector.name)
-        segments = selector.name.split('_')[3].split('.')
-        category = segments[0]
-        side = '.' + segments[1] if len(segments) > 1 else ''
-
-        if on_depsgraph_update.operator == active_operator:
-          # print(f'{ active_object } 移动中...')
-          print(f'{ update.id.name } 移动中...')
-          update_shape_key_value(shape_key_map[category + side])
-          # update_shape_key_value(shape_key_map['eye' + '.l'])
-          # update_shape_key_value(shape_key_map[category + '.r'])
-
-          return
-
         # 左边橙色 右边红色 active_object 全程 .l，update.id 全程 .l
         # 左边红色 右边橙色 active_object 全程 .r，update.id 全程 .l
-        if active_operator.name == 'Move':
-          # print(f'{ active_object } 移动完成...')
-          print(f'{ update.id.name } 移动完成...')
-          # frame = get_current_frame()
-          # selector_insert_keyframe(selector, frame)
-          # shape_key_insert_keyframe(shape_key_map[category], frame)
+        selector = update.id
+        selectors = get_selected_objects()
+        segments = selectors[0].name.split('_')[3].split('.')
+        category = segments[0]
+        side = '.' + segments[1] if len(segments) > 1 else ''
+        # 全程 .l
+        x, _, z = selector.location
+        skip = on_depsgraph_update.prev_x == x and on_depsgraph_update.prev_z == z
 
+        if on_depsgraph_update.operator == active_operator:
+          if skip:
+            # print('假移动')
+            return
+          else:
+            # print(f'{ update.id.name } 移动中...')
+            on_depsgraph_update.prev_x = x
+            on_depsgraph_update.prev_z = z
+
+            if len(selectors) > 1:
+              # .l 和 .r
+              mirror_side = '.l' if side == '.r' else '.l'
+              update_shape_key_value(shape_key_map[category + side])
+              update_shape_key_value(shape_key_map[category + mirror_side])
+            else:
+              update_shape_key_value(shape_key_map[category + side])
+        
+            return
+
+        if active_operator.name == 'Move':
+          # 无法判断，存在移动完成后继续移动，
+          # if skip:
+          #   print(f'{ update.id.name } 假移动完成...')
+          # else:
+          # print(f'{ active_object } 移动完成...')
+
+          # print(f'{ update.id.name } 移动完成...')
+          frame = get_current_frame()
+
+          if len(selectors) > 1:
+            # .l 和 .r
+            mirror_side = '.l' if side == '.r' else '.l'
+            for s in selectors:
+              selector_insert_keyframe(s, frame)
+            shape_key_insert_keyframe(shape_key_map[category + side], frame)
+            shape_key_insert_keyframe(shape_key_map[category + mirror_side], frame)
+          else:
+            selector_insert_keyframe(selectors[0], frame)
+            # print(selector)
+            # print(category + side)
+            # print(selectors == selector)
+            # <bpy_struct, Object("shape_key_selector_eyebrow.r") at 0x000002C22A7D2420>
+            # print(selectors[0])
+            # <bpy_struct, Object("shape_key_selector_eyebrow.r") at 0x000002C22C7D3908, evaluated>
+            # print(selector)
+            shape_key_insert_keyframe(shape_key_map[category + side], frame)
+          
         on_depsgraph_update.operator = active_operator
-        # on_depsgraph_update.done_op = active_operator
 
         break
 
@@ -221,6 +230,8 @@ def _on_depsgraph_update (merged_category_names, shape_key_name):
   # 在第二次移动中，context.active_operator 上一次移动（或其他操作）结束后给的那个值，
   # 移动结束后会有一个新值
   on_depsgraph_update.operator = get_context().active_operator
+  on_depsgraph_update.prev_x = None
+  on_depsgraph_update.prev_z = None
 
   return on_depsgraph_update, shape_key_map
 
@@ -236,7 +247,7 @@ class OBJECT_OT_click_mode (get_operator()):
     shape_key_name = scene.shape_key_name
     merged_category_names, dichotomy_category_names = merge_category_names(categories)
     cb, shape_key_map = _on_depsgraph_update(merged_category_names, shape_key_name)
-    # get_app().handlers.depsgraph_update_post.append(cb)
+    get_app().handlers.depsgraph_update_post.append(cb)
     add_click_mode(shape_key_map, categories)
 
     # for key, value in shape_key_map.items():

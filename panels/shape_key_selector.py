@@ -28,8 +28,9 @@ class VIEW3D_PT_shape_key_selector (get_panel()):
     scene = context.scene
     categories = scene.categories
 
-    add_row_with_label(layout, '形态键:', scene, "mesh_name", .5)
+    add_row_with_label(layout, 'Mesh:', scene, "mesh_name", .5)
     add_row_with_label(layout, '形态键名称:', scene, "shape_key_name", .5)
+    add_row_with_label(layout, '最小移动距离:', scene, "step", .5)
 
     for index, prop in enumerate(categories):
       row = layout.row()
@@ -55,7 +56,7 @@ class VIEW3D_PT_shape_key_selector (get_panel()):
       text="添加类别", 
       icon='ADD'
     )
-    add_row_with_label(layout, 'image output:', scene.render, "filepath", .5)
-    add_row(layout, scene, "overwrite", text = '图片已经存在时，是否重写')
+    add_row_with_label(layout, '参考图目录：', scene.render, "filepath", .5)
+    add_row(layout, scene, "overwrite", text = '参考图已经存在时，是否重写')
     add_row_with_operator(layout, OBJECT_OT_shape_key_selector.bl_idname, text = '初始化形态键选择器')
     add_row_with_operator(layout, OBJECT_OT_click_mode.bl_idname, text = '点击模式')

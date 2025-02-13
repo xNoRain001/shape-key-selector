@@ -88,7 +88,7 @@ def import_shape_key_images (shape_key_names_map, texts, image_dir):
 
   return images
 
-def freeze_frame (target, axis):
+def freeze_location (target, axis, step = 1):
   # 0 表示 x 轴
   param = 0
 
@@ -97,11 +97,30 @@ def freeze_frame (target, axis):
   elif axis == 'z':
     param = 2
 
-  # 添加驱动器
+  # 如果能有办法判断出移动结束，可以替换掉监听视图更新，达到最好的性能
+  # target['x'] = 0.0
+  # target.driver_remove('["x"]')
+  # driver = target.driver_add('["x"]').driver
+  # driver.type = 'SCRIPTED'
+  # var = driver.variables.new()
+  # var.name = 'var'
+  # var.type = 'TRANSFORMS'
+  # _target = var.targets[0]
+  # _target.id = target
+  # _target.transform_type = f'LOC_{ axis.upper() }'
+  # _target.transform_space = 'TRANSFORM_SPACE'
+  # def driverFunc(var):
+  #   # print('自身位置', var)
+  #   return var
+  
+  # driverFunc.operator = None
+
+  # bpy.app.driver_namespace['driverFunc'] = driverFunc
+  # driver.expression = f'driverFunc(var)'
+
+  target.driver_remove("location", param)
   driver = target.driver_add("location", param).driver
-  # 设置驱动器类型
   driver.type = 'SCRIPTED'
-  # 添加变量
   var = driver.variables.new()
   var.name = 'var'
   var.type = 'TRANSFORMS'
@@ -109,8 +128,7 @@ def freeze_frame (target, axis):
   _target.id = target
   _target.transform_type = f'LOC_{ axis.upper() }'
   _target.transform_space = 'TRANSFORM_SPACE'
-  driver.expression = 'round(var)'
-  # round(var * 2) / 2
+  driver.expression = f'round(var * { 1 / step }) / { 1 / step }'
 
 def freeze_selectors_and_shape_key_images(categories, images, dichotomy_category_names):
   for category in categories:
@@ -128,13 +146,13 @@ def freeze_selectors_and_shape_key_images(categories, images, dichotomy_category
       # selector.location[1] = -0.01
       # 锁定 y 轴
       selector.lock_location[1] = True
-      # freeze_frame(selector, 'x')
-      # freeze_frame(selector, 'z')
+      freeze_location(selector, 'x')
+      freeze_location(selector, 'z')
 
   for image in images:
     image.lock_location[1] = True
-    freeze_frame(image, 'x')
-    freeze_frame(image, 'z')
+    # freeze_location(image, 'x')
+    # freeze_location(image, 'z')
 
 def add_driver (options):
   target = options['target']
