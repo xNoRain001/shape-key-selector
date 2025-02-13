@@ -1,23 +1,14 @@
-from .reload_addon import Reload_Addon
+from .reload_addon import VIEW3D_PT_reload_addon
 from ..libs.blender_utils import register_classes, unregister_classes
-from .shape_key_selector import InitPropertyOperator, Shape_Key_Selector, MyPropertyGroup, AddPropertyOperator, RemovePropertyOperator
-from ..libs.blender_utils import add_scene_custom_prop
+from .shape_key_selector import VIEW3D_PT_shape_key_selector
 
 classes = (
-  Reload_Addon,
-  Shape_Key_Selector,
-  MyPropertyGroup,
-  AddPropertyOperator,
-  RemovePropertyOperator,
-  InitPropertyOperator
+  VIEW3D_PT_reload_addon,
+  VIEW3D_PT_shape_key_selector,
 )
-
-import bpy
 
 def register():
   register_classes(classes)
-  # add_scene_custom_prop('my_properties', 'Collection', type2 = MyPropertyGroup)
-  bpy.types.Scene.my_properties = bpy.props.CollectionProperty(type=MyPropertyGroup)
 
 def unregister():
   unregister_classes(classes)

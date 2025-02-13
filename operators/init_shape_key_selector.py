@@ -1,7 +1,8 @@
 import os
 import json
+from collections import defaultdict
 
-from ..const import selector_prefix, ref_image_prefix
+from ..const import selector_prefix, ref_image_prefix, shape_key_empty_object
 from ..libs.blender_utils import (
   get_context, 
   get_ops, 
@@ -18,93 +19,12 @@ from ..libs.blender_utils import (
   get_shape_keys,
   get_object_,
   active_collection,
-  get_active_collection
+  get_active_collection,
+  get_props,
+  active_object_,
+  get_app,
+  report_warning
 )
-
-def rename_shape_keys (key_blocks, categories, shape_keys, new_names):
-  def gen_list ():
-    merged_shape_key_names_with_category = {}
-    separate_mark = {}
-    shape_key_names_with_category = {}
-
-    for category in categories:
-      shape_key_names_with_category[category] = []
-      separate_mark[category] = []
-      merged_shape_key_names_with_category[category] = []
-
-    return [
-      merged_shape_key_names_with_category,
-      separate_mark,
-      shape_key_names_with_category
-    ]
-
-  (
-    merged_shape_key_names_with_category,
-    separate_mark,
-    shape_key_names_with_category
-  ) = gen_list()
-
-  for key_block in key_blocks:
-    old_name = key_block.name
-    
-    if old_name in shape_keys:
-      new_name = shape_keys[old_name]
-      key_block.name = new_name
-
-      # 一个形状键有 .l 和 .r 说明这个形状键是被拆分的，不需要添加驱动器，拆分后的
-      # .l 和 .r 才需要添加
-      separated = f'{ new_name }.l' in new_names and f'{ new_name }.r' in new_names
-      
-      if new_name.startswith('phoneme'):
-        if separated:
-          # 被拆分，驱动器不添加，拍照添加
-          merged_shape_key_names_with_category['phoneme'].append(new_name)
-          separate_mark['phoneme'].append(separated)
-        else:
-          # 这里可能是未被拆分的形态键或者拆分后的 .l(r)
-          if not (new_name.endswith('.l') or new_name.endswith('.r')):
-            # 未被拆分的添加进拍照
-            merged_shape_key_names_with_category['phoneme'].append(new_name)
-            separate_mark['phoneme'].append(separated)
-
-          # 未被拆分的或者拆分后的添加进驱动器
-          shape_key_names_with_category['phoneme'].append(new_name)
-      elif new_name.startswith('mouth'):
-        if separated:
-          merged_shape_key_names_with_category['mouth'].append(new_name)
-          separate_mark['mouth'].append(separated)
-        else:
-          if not (new_name.endswith('.l') or new_name.endswith('.r')):
-            merged_shape_key_names_with_category['mouth'].append(new_name)
-            separate_mark['mouth'].append(separated)
-
-          shape_key_names_with_category['mouth'].append(new_name)
-      elif new_name.startswith('eyebrow'):
-        if separated:
-          merged_shape_key_names_with_category['eyebrow'].append(new_name)
-          separate_mark['eyebrow'].append(separated)
-        else:
-          if not (new_name.endswith('.l') or new_name.endswith('.r')):
-            merged_shape_key_names_with_category['eyebrow'].append(new_name)
-            separate_mark['eyebrow'].append(separated)
-
-          shape_key_names_with_category['eyebrow'].append(new_name)
-      elif new_name.startswith('eye'):
-        if separated:
-          merged_shape_key_names_with_category['eye'].append(new_name)
-          separate_mark['eye'].append(separated)
-        else:
-          if not (new_name.endswith('.l') or new_name.endswith('.r')):
-            merged_shape_key_names_with_category['eye'].append(new_name)
-            separate_mark['eye'].append(separated)
-
-          shape_key_names_with_category['eye'].append(new_name)
-
-  return [
-    shape_key_names_with_category, 
-    merged_shape_key_names_with_category, 
-    separate_mark
-  ]
 
 def gen_mouth_bone ():
   context = get_context()
@@ -132,16 +52,14 @@ def camera_view ():
   get_ops().view3d.camera_to_view()
   context.area.type = prev_context
 
-def import_shape_key_images (merged_shape_key_names_with_category, texts, image_dir):
+def import_shape_key_images (shape_key_names_map, texts, image_dir):
   images = []
   z = 0
-  z_list = []
 
-  for category, shape_key_names in merged_shape_key_names_with_category.items():
+  for category, shape_key_names in shape_key_names_map.items():
     files = []
     text = texts[category]
     text.location = (-1, 0, z)
-    z_list.append(z)
 
     for shape_key_name in shape_key_names:
       files.append({ "name": f"{ shape_key_name }.png" })
@@ -168,7 +86,7 @@ def import_shape_key_images (merged_shape_key_names_with_category, texts, image_
       image.matrix_parent_inverse = text.matrix_world.inverted()
       images.append(image)
 
-  return [images, z_list]
+  return images
 
 def freeze_frame (target, axis):
   # 0 表示 x 轴
@@ -194,19 +112,24 @@ def freeze_frame (target, axis):
   driver.expression = 'round(var)'
   # round(var * 2) / 2
 
-def freeze_selectors_and_shape_key_images(categories, images, separate_mark):
+def freeze_selectors_and_shape_key_images(categories, images, dichotomy_category_names):
   for category in categories:
-    separated = any(separate_mark[category])
-    selectors = [
-      get_object_(f'{ selector_prefix }{ category }.l'), 
-      get_object_(f'{ selector_prefix }{ category }.r')] if separated else [get_object_(f'{ selector_prefix }{ category }')]
+    selectors = []
+
+    if category in dichotomy_category_names:
+      selectors.extend([
+        get_object_(f'{ selector_prefix }{ category }.l'), 
+        get_object_(f'{ selector_prefix }{ category }.r')
+      ])
+    else:
+      selectors.append(get_object_(f'{ selector_prefix }{ category }'))
     
     for selector in selectors:
       # selector.location[1] = -0.01
       # 锁定 y 轴
       selector.lock_location[1] = True
-      freeze_frame(selector, 'x')
-      freeze_frame(selector, 'z')
+      # freeze_frame(selector, 'x')
+      # freeze_frame(selector, 'z')
 
   for image in images:
     image.lock_location[1] = True
@@ -236,7 +159,7 @@ def add_driver (options):
     
   driver.expression = expression
 
-def shape_key_add_driver (shape_key_names_with_category, separate_mark, key_blocks):
+def shape_key_add_driver (shape_key_names_map, dichotomy_category_names, collection_name):
   def init_targets (options, target1, target2):
     options['targets'].append([
       { 
@@ -249,43 +172,50 @@ def shape_key_add_driver (shape_key_names_with_category, separate_mark, key_bloc
       }
     ])
 
-  for category, shape_key_names in shape_key_names_with_category.items():
-    separated = any(separate_mark[category])
+  create_collection(collection_name)
+  active_collection(collection_name)
+  get_ops().object.empty_add(type = 'PLAIN_AXES')
+  empty_object = get_active_object()
+  empty_object.name = shape_key_empty_object
+
+  for category, shape_key_names in shape_key_names_map.items():
+    separated = category in dichotomy_category_names
 
     for shape_key_name in shape_key_names:
-      key_block = key_blocks[shape_key_name]
-      driver_options = {
-        'target': key_block,
-        'prop': 'value',
-        'type': 'SCRIPTED',
-        'vars': [{ 'var_name': 'var', 'var_type': 'LOC_DIFF' }],
-        'targets': [],
-        'expression': '1 - var'
-      }
-      selector = get_object_(f'{ selector_prefix }{ category }')
-      selector_l = get_object_(f'{ selector_prefix }{ category }.l')
-      selector_r = get_object_(f'{ selector_prefix }{ category }.r')
-      l = shape_key_name.endswith('.l')
-      r = shape_key_name.endswith('.r')
-      image = get_object_(ref_image_prefix + (shape_key_name[:-2] if l or r else shape_key_name))
-      
-      if l:
-        init_targets(driver_options, selector_l, image)
-      elif r:
-        init_targets(driver_options, selector_r, image)
-      elif separated:
-        # 是未分割的形态键，但是所在的组有其他形态键被分割过
-        init_targets(driver_options, selector_l, image)
-        driver_options['vars'].append({ 'var_name': 'var2', 'var_type': 'LOC_DIFF' })
-        init_targets(driver_options, selector_r, image)
-        driver_options['expression'] = '1 - (var + var2) / 2'
+      image = ref_image_prefix + shape_key_name
+
+      if separated:
+        list = ['.l', '.r']
+        for item in list:
+          # 写成浮点数形式，值才是浮点数
+          empty_object[shape_key_name + item] = 0.0
+          driver_options = {
+            'target': empty_object,
+            'prop': f'["{ shape_key_name }{ item }"]',
+            'type': 'SCRIPTED',
+            'vars': [{ 'var_name': 'var', 'var_type': 'LOC_DIFF' }],
+            'targets': [],
+            'expression': '1 - var'
+          }
+          selector = get_object_(f'{ selector_prefix }{ category }{ item }')
+          init_targets(driver_options, selector, get_object_(image))
+          add_driver(driver_options)
       else:
-        # 所在的组所有形态键都未被分割过
-        init_targets(driver_options, selector, image)
+        empty_object[shape_key_name] = 0.0
+        driver_options = {
+          'target': empty_object,
+          'prop': f'["{ shape_key_name }"]',
+          'type': 'SCRIPTED',
+          'vars': [{ 'var_name': 'var', 'var_type': 'LOC_DIFF' }],
+          'targets': [],
+          'expression': '1 - var'
+        }
+        selector = get_object_(f'{ selector_prefix }{ category }')
+        init_targets(driver_options, selector, get_object_(image))
+        add_driver(driver_options)     
 
-      add_driver(driver_options)
-
-def gen_tip_texts (categories, collection_name):
+def gen_label_texts (categories, collection_name):
+  create_collection(collection_name)
   active_collection(collection_name)
   texts = {}
 
@@ -313,29 +243,57 @@ def gen_collections (collection_names):
     # create_collection(collection_name, parent_collection_name)
     create_collection(collection_name)
 
-def check_shape_key_names (shape_keys):
-  shape_key_names = {}
+def check_shape_key_names (shape_keys, dichotomy_category_names):
+  passing = True
 
-  for value in shape_keys.values():
-    shape_key_names[value] = None
+  # 被拆分的类别中 .l 和 .r 必须同时存在
+  for category in dichotomy_category_names:
+    for shape_key in shape_keys:
+      shape_key_name = shape_key.name
 
-  for new_name in shape_key_names.keys():
-    if (
-      (f'{ new_name }.l' in shape_key_names) ^ 
-      (f'{ new_name }.r' in shape_key_names)
-    ):
-      print('形状键命名不符合规范')
+      if (
+        shape_key_name.startswith(category + '_') and 
+        shape_key_name.endswith(('.l', '.r'))
+      ):
+        # TODO: 保存检测过的一边 之后遇到到另一边时直接跳过
+        side = shape_key_name.split('.')[-1]
+        mirror_side = 'l' if side == 'r' else 'r'
+        mirror_name = shape_key_name[:-1] + mirror_side
 
-      return False
-    
-  return [True, shape_key_names]
+        if not shape_keys.get(mirror_name):
+          passing = False
 
-def gen_shape_key_selector (image_dir, overwrite, categories, self, shape_key):
-  # for test
-  # image_dir = 'D:\\tmp2\\'
+          return passing, mirror_name, category
+        
+  return passing, None, None
 
-  # TODO: 添加另一种嘴型选择器 https://www.bilibili.com/video/BV1ix4y1R7aw
-  shape_keys = {
+def split_shape_keys (shape_keys, mesh, shape_key_names_map, dichotomy_category_names):
+  for category in dichotomy_category_names:
+    shape_key_names = shape_key_names_map[category]
+
+    for shape_key_name in shape_key_names:
+      shape_key = shape_keys.get(shape_key_name + '.l')
+      
+      # 存在 .l 则一定存在 .r，说明这个形态键已经被拆分了
+      if not shape_key:
+        l = mesh.shape_key_add(name = f"{ shape_key_name }.l")
+        r = mesh.shape_key_add(name = f"{ shape_key_name }.r")
+
+        # 遍历所有顶点，拆分形态键
+        _shape_key = shape_keys.get(shape_key_name)
+        for i, vert in enumerate(_shape_key.data):
+          co = vert.co
+
+          if co.x > 0:
+            l.data[i].co = co
+          else:
+            r.data[i].co = co
+
+def rename_shape_keys (
+  shape_keys, 
+  merged_category_names
+):
+  name_map = {
     '基型': 'basis',
     # phoneme
     'あ': 'phoneme_ah',
@@ -408,53 +366,57 @@ def gen_shape_key_selector (image_dir, overwrite, categories, self, shape_key):
     '下眼上': 'eye_lower_up',
     '瞳小': 'eye_miosis',
   }
-  key_blocks = get_shape_keys(shape_key)
+  shape_key_map = defaultdict(list)
 
-  if not key_blocks:
-    self.report({'WARNING'}, "形状键不存在")
+  for shape_key in shape_keys:
+    shape_key_name = shape_key.name
 
-    return
-  
-  passing, shape_key_names = check_shape_key_names(shape_keys)
+    if shape_key_name in name_map:
+      new_shape_key_name = name_map[shape_key_name]
+      shape_key.name = new_shape_key_name
 
-  if not passing:
-    self.report({'WARNING'}, "形状键命名不符合规范")
+      for category in merged_category_names:
+        if (
+          new_shape_key_name.startswith(category + '_') and
+          not new_shape_key_name.endswith(('.l', '.r'))
+        ):
+          shape_key_map[category].append(new_shape_key_name)
 
-    return
-  
-  collection_names = [
-    'shape_key_cameras', 
-    'shape_key_texts', 
-    # 图片会和文本进行父子绑定
-    # 'shape_key_ref_images',
-    'shape_key_selectors',
-  ]
+  return shape_key_map
+
+def gen_shape_key_selector (
+  image_dir, 
+  overwrite, 
+  merged_category_names, 
+  dichotomy_category_names, 
+  shape_keys, 
+  mesh
+):
+  # TODO: 添加另一种嘴型选择器 https://www.bilibili.com/video/BV1ix4y1R7aw
+  shape_key_map = rename_shape_keys(shape_keys, merged_category_names)
+  split_shape_keys(shape_keys, mesh, shape_key_map, dichotomy_category_names)
+  master_collection_name = 'shape_key_selector'
+  # collection.children.link(child_collection)
+  camera_collection_name = 'shape_key_cameras'
+  text_collection_name = 'shape_key_texts'
+  selector_collection_name = 'shape_key_selectors'
+  empty_object_collection_name = 'shape_key_empty_objects'
   camera_prefix = 'shape_key_camera_'
-  gen_collections(collection_names)
-  gen_cameras(categories, collection_names[0], camera_prefix)
-  (
-    shape_key_names_with_category, 
-    merged_shape_key_names_with_category, 
-    separate_mark
-  ) = rename_shape_keys(key_blocks, categories, shape_keys, shape_key_names)
-  texts = gen_tip_texts(categories, collection_names[1])
+  gen_cameras(merged_category_names, camera_collection_name, camera_prefix)
+  texts = gen_label_texts(merged_category_names, text_collection_name)
   gen_shape_key_images(
-    merged_shape_key_names_with_category, 
-    key_blocks, 
+    shape_key_map, 
+    shape_keys, 
     image_dir,
     overwrite,
     camera_prefix
   )
-  images, z_list = import_shape_key_images(
-    merged_shape_key_names_with_category, 
-    texts, 
-    image_dir
-  )
-  gen_selectors(categories, texts, separate_mark, z_list, collection_names[2])
-  freeze_selectors_and_shape_key_images(categories, images, separate_mark)
-  shape_key_add_driver(shape_key_names_with_category, separate_mark, key_blocks)
+  images = import_shape_key_images(shape_key_map, texts, image_dir)
+  gen_selectors(merged_category_names, texts, dichotomy_category_names, selector_collection_name)
+  freeze_selectors_and_shape_key_images(merged_category_names, images, dichotomy_category_names)
+  shape_key_add_driver(shape_key_map, dichotomy_category_names, empty_object_collection_name)
 
-def gen_selectors (categories, texts, separate_mark, z_list, collection_name):
+def gen_selectors (merged_category_names, texts, dichotomy_category_names, collection_name):
   def gen_selector (dir, side, z):
     file_path = os.path.join(dir, '..', f'assets/selector{ side }.json')
     name = f'{ selector_prefix }{ category }{ side }'
@@ -470,7 +432,8 @@ def gen_selectors (categories, texts, separate_mark, z_list, collection_name):
     mesh = get_data().meshes.new(name)
     mesh.from_pydata(vertices, [], faces)
     obj = get_data().objects.new(name, mesh)
-    get_context().scene.collection.objects.link(obj)
+    # 放入集合
+    collection.objects.link(obj)
 
     for material_data in materials:
       material_name = material_data.get('name', '')
@@ -489,23 +452,34 @@ def gen_selectors (categories, texts, separate_mark, z_list, collection_name):
     text = texts[category]
     obj.parent = text
     obj.matrix_parent_inverse = text.matrix_world.inverted()
-    obj.location = (0, 0, z)
+    obj.location = (-1, 0, z)
     obj.scale = (9, 9, 9)
+    # 设置成常量插值
+    # obj.keyframe_insert(data_path="location", index=0, frame=0) 
+    # obj.keyframe_insert(data_path="location", index=2, frame=0) 
+    # fcurves = obj.animation_data.action.fcurves
+    # for fcurve in fcurves:
+    #   keyframe_points = fcurve.keyframe_points
+
+    #   for keyframe_point in keyframe_points:
+    #     keyframe_point.interpolation = 'CONSTANT'
 
   dir = os.path.dirname(os.path.abspath(__file__))
+  collection = create_collection(collection_name)
   active_collection(collection_name)
 
-  for index, category in enumerate(categories):
-    separated = any(separate_mark[category])
-    z = z_list[index]
+  for index, category in enumerate(merged_category_names):
+    z = texts[category].location[2]
+    # z = z_list[index]
 
-    if separated:
+    if category in dichotomy_category_names:
       gen_selector(dir, '.l', z)
       gen_selector(dir, '.r', z)
     else:
       gen_selector(dir, '', z)
 
 def gen_cameras (categories, collection_name, camera_prefix):
+  create_collection(collection_name)
   active_collection(collection_name)
 
   for category in categories:
@@ -514,8 +488,8 @@ def gen_cameras (categories, collection_name, camera_prefix):
     camera.name = camera_prefix + category
 
 def gen_shape_key_images (
-  merged_shape_key_names_with_category,
-  key_blocks, 
+  shape_key_names_map,
+  shape_keys, 
   image_dir,
   overwrite,
   camera_prefix
@@ -528,7 +502,7 @@ def gen_shape_key_images (
   context.scene.render.resolution_x = 1080
   context.scene.render.resolution_y = 1080
 
-  for category, shape_key_names in merged_shape_key_names_with_category.items():
+  for category, shape_key_names in shape_key_names_map.items():
     # TODO: 检查相机是否存在
     camera = get_object_(camera_prefix + category)
     context.scene.camera = camera
@@ -539,7 +513,7 @@ def gen_shape_key_images (
 
       if (not exists) or (exists and overwrite):
         context.scene.render.filepath = image_path
-        keyblock = key_blocks[shape_key_name]
+        keyblock = shape_keys[shape_key_name]
         keyblock.value = 1
         get_ops().render.opengl(write_still = True)
         keyblock.value = 0
@@ -549,37 +523,92 @@ def gen_shape_key_images (
   context.scene.render.resolution_x = resolution_x
   context.scene.render.resolution_y = resolution_y
 
-def before (self, category_collections):
+def before (self, merged_category_names, shape_key_name, shape_keys, dichotomy_category_names, mesh):
   passing = True
-  categories = []
 
-  if not len(category_collections):
+  if not shape_keys:
     passing = False
-    self.report({'WARNING'}, "至少需要一个类别")
-  else:
-    for category_collection in category_collections:
-      categories.append(category_collection.name)
+    report_warning(self, f"形态键 { shape_key_name } 不存在")
 
-    set_mode('OBJECT')
+    return passing
 
-  return [passing, categories]
+  if not len(merged_category_names):
+    passing = False
+    report_warning(self, "至少需要一个类别")
 
-class Shape_Key_Selector (get_operator()):
+    return passing
+
+  # 检查被拆分的类别，要求 .l 和 .r 必须同时存在
+  for category in dichotomy_category_names:
+    for shape_key in shape_keys:
+      shape_key_name = shape_key.name
+
+      if (
+        shape_key_name.startswith(category + '_') and 
+        shape_key_name.endswith(('.l', '.r'))
+      ):
+        # 去除 .l 或 .r 后的名字
+        base = shape_key_name[:-2]
+        # .l 或 .r
+        side = shape_key_name[-2:]
+        mirror_side = '.l' if side == '.r' else '.r'
+        mirror_name = base + mirror_side
+
+        if not shape_keys.get(mirror_name):
+          passing = False
+          report_warning(self, f"形态键 { mirror_name } 不存在")
+
+          return passing
+        
+  set_mode('OBJECT')
+  active_object_(mesh)
+        
+  return passing
+
+def merge_category_names (categories):
+  merged_category_names = set()
+  dichotomy_category_names = set()
+
+  for category in categories:
+    category_name = category.name
+
+    if category_name.endswith(('.l', '.r')):
+      # 去除 .l 或 .r 后缀
+      _category_name = category_name[:-2]
+      merged_category_names.add(_category_name)
+      dichotomy_category_names.add(_category_name)
+    else:
+      merged_category_names.add(category_name)
+
+  return merged_category_names, dichotomy_category_names
+
+class OBJECT_OT_shape_key_selector (get_operator()):
   bl_idname = 'object.shape_key_selector'
   bl_label = 'Shape Key Selector'
 
   def execute(self, context):
     scene = context.scene
-    category_collections = scene.my_properties
-    [passing, categories] = before(self, category_collections)
+    categories = scene.categories
+    mesh_name = scene.mesh_name
+    shape_key_name = scene.shape_key_name
+    overwrite = scene.overwrite
+    # for test
+    filepath = 'D:\\tmp2\\'
+    # filepath = scene.render.filepath
+
+    shape_keys = get_shape_keys(shape_key_name)
+    merged_category_names, dichotomy_category_names = merge_category_names(categories)
+    mesh = get_object_(mesh_name)
+    passing = before(self, merged_category_names, shape_key_name, shape_keys, dichotomy_category_names, mesh)
 
     if passing:
       gen_shape_key_selector(
-        scene.render.filepath, 
-        scene.overwrite, 
-        categories, 
-        self,
-        scene.shape_key
+        filepath, 
+        overwrite, 
+        merged_category_names,
+        dichotomy_category_names,
+        shape_keys,
+        mesh
       )
 
     return {'FINISHED'}
