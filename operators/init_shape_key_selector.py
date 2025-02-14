@@ -286,6 +286,10 @@ def check_shape_key_names (shape_keys, dichotomy_category_names):
   return passing, None, None
 
 def split_shape_keys (shape_keys, mesh, shape_key_names_map, dichotomy_category_names):
+  # 将所有形态键值为 0，如果此时形态键有值，分割后的形态键值为 1 时的形态就是此时的形态
+  for shape_key in shape_keys:
+    shape_key.value = 0
+
   for category in dichotomy_category_names:
     shape_key_names = shape_key_names_map[category]
 
@@ -393,12 +397,15 @@ def rename_shape_keys (
       new_shape_key_name = name_map[shape_key_name]
       shape_key.name = new_shape_key_name
 
-      for category in merged_category_names:
-        if (
-          new_shape_key_name.startswith(category + '_') and
-          not new_shape_key_name.endswith(('.l', '.r'))
-        ):
-          shape_key_map[category].append(new_shape_key_name)
+  for category in merged_category_names:
+    for shape_key in shape_keys:
+      shape_key_name = shape_key.name
+
+      if (
+        shape_key_name.startswith(category + '_') and
+        not shape_key_name.endswith(('.l', '.r'))
+      ):
+        shape_key_map[category].append(shape_key_name)
 
   return shape_key_map
 

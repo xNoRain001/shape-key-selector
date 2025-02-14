@@ -17,7 +17,8 @@ from ..libs.blender_utils import (
   get_types_object,
   get_operator,
   active_object_,
-  get_selected_objects
+  get_selected_objects,
+  set_current_frame
 )
 
 from ..const import selector_prefix, shape_key_empty_object
@@ -63,7 +64,7 @@ def add_click_mode (shape_key_map, categories):
         selector.select_set(True)
         # 不激活它，active_object 就会为 None，
         # 就不会执行 depsgraph_update_handler 中写的其它逻辑
-        # active_object_(selector)
+        active_object_(selector)
         selector_insert_keyframe(selector, frame)
           
     def update_shape_key_value (shape_key_map, types, frame):
@@ -127,7 +128,36 @@ def update_shape_key_value (shape_keys):
   for shape_key in shape_keys:
     shape_key.value = empty_object[shape_key.name]
 
-def _on_depsgraph_update (merged_category_names, shape_key_name):
+def shape_key_update_keyframe (selector, shape_keys, current_frame, mesh):
+  fcurves = mesh.data.shape_keys.animation_data.action.fcurves
+
+  for shape_key in shape_keys:
+    data_path = f'key_blocks["{ shape_key.name }"].value'
+    fcurves.remove(fcurves.find(data_path))
+  
+  action = selector.animation_data.action
+
+  # 所有帧都被删除时值为 None
+  if action:
+    keyframe_points = selector.animation_data.action.fcurves.find("location", index = 0).keyframe_points
+    
+    for keyframe_point in keyframe_points:
+      frame = int(keyframe_point.co[0])
+      set_current_frame(frame)
+      update_shape_key_value(shape_keys)
+      shape_key_insert_keyframe(shape_keys, frame)
+
+  set_current_frame(current_frame)
+
+  # fcurves = mesh.data.shape_keys.animation_data.action.fcurves
+
+  # for shape_key in shape_keys:
+  #   data_path = f'key_blocks["{ shape_key.name }"].value'
+  #   keyframe_points = fcurves.find(data_path).keyframe_points
+  #   keyframe_point = [kp for kp in keyframe_points if kp.co[0] == frame][0]
+  #   keyframe_points.remove(keyframe_point)
+
+def _on_depsgraph_update (merged_category_names, shape_key_name, mesh):
   shape_keys = get_shape_keys(shape_key_name)
   shape_key_map = defaultdict(list)
   empty_object = get_object_(shape_key_empty_object)
@@ -165,13 +195,14 @@ def _on_depsgraph_update (merged_category_names, shape_key_name):
       if update.is_updated_transform:
         # 左边橙色 右边红色 active_object 全程 .l，update.id 全程 .l
         # 左边红色 右边橙色 active_object 全程 .r，update.id 全程 .l
+        # 可能为 mesh
         selector = update.id
         selectors = get_selected_objects()
         segments = selectors[0].name.split('_')[3].split('.')
         category = segments[0]
         side = '.' + segments[1] if len(segments) > 1 else ''
         # 全程 .l
-        x, _, z = selector.location
+        x, _, z = selectors[0].location
         skip = on_depsgraph_update.prev_x == x and on_depsgraph_update.prev_z == z
 
         if on_depsgraph_update.operator == active_operator:
@@ -185,13 +216,31 @@ def _on_depsgraph_update (merged_category_names, shape_key_name):
 
             if len(selectors) > 1:
               # .l 和 .r
-              mirror_side = '.l' if side == '.r' else '.l'
+              mirror_side = '.l' if side == '.r' else '.r'
               update_shape_key_value(shape_key_map[category + side])
               update_shape_key_value(shape_key_map[category + mirror_side])
             else:
               update_shape_key_value(shape_key_map[category + side])
         
             return
+          
+        op_name = active_operator.name
+        print(op_name)
+        frame = get_current_frame()
+
+        
+        # TODO: 帧移动，缩放，复制，删除
+        if (
+          op_name == 'Delete Keyframes' or
+          op_name == 'Transform' or
+          op_name == 'Duplicate'
+        ):
+          if len(selectors) > 1:
+            mirror_side = '.l' if side == '.r' else '.l'
+            shape_key_update_keyframe(selectors[0], shape_key_map[category + side], frame, mesh)
+            shape_key_update_keyframe(selectors[1], shape_key_map[category + mirror_side], frame, mesh)
+          else:
+            shape_key_update_keyframe(selectors[0], shape_key_map[category + side], frame, mesh)
 
         if active_operator.name == 'Move':
           # 无法判断，存在移动完成后继续移动，
@@ -200,12 +249,11 @@ def _on_depsgraph_update (merged_category_names, shape_key_name):
           # else:
           # print(f'{ active_object } 移动完成...')
 
-          # print(f'{ update.id.name } 移动完成...')
-          frame = get_current_frame()
 
+          # print(f'{ update.id.name } 移动完成...')
           if len(selectors) > 1:
             # .l 和 .r
-            mirror_side = '.l' if side == '.r' else '.l'
+            mirror_side = '.l' if side == '.r' else '.r'
             for s in selectors:
               selector_insert_keyframe(s, frame)
             shape_key_insert_keyframe(shape_key_map[category + side], frame)
@@ -245,8 +293,10 @@ class OBJECT_OT_click_mode (get_operator()):
     scene = context.scene
     categories = scene.categories
     shape_key_name = scene.shape_key_name
+    mesh_name = scene.mesh_name
+    mesh = get_object_(mesh_name)
     merged_category_names, dichotomy_category_names = merge_category_names(categories)
-    cb, shape_key_map = _on_depsgraph_update(merged_category_names, shape_key_name)
+    cb, shape_key_map = _on_depsgraph_update(merged_category_names, shape_key_name, mesh)
     get_app().handlers.depsgraph_update_post.append(cb)
     add_click_mode(shape_key_map, categories)
 
