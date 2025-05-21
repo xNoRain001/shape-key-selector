@@ -3,7 +3,7 @@ from ..libs.blender_utils import get_operator, get_ops
 
 # Debug
 class OBJECT_OT_reload_addon (get_operator()):
-  bl_idname = "object.reload_addon"
+  bl_idname = "object.reload_shape_key_selector_addon"
   bl_label = "Reload Addon"
 
   def execute(self, context):

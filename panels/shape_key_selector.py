@@ -15,13 +15,14 @@ from ..operators.add_category import OBJECT_OT_add_category
 from ..operators.remove_category import OBJECT_OT_remove_category
 from ..operators.dichotomy import OBJECT_OT_dichotomy
 from ..operators.select import OBJECT_OT_select
+from ..const import bl_category
 
 class VIEW3D_PT_shape_key_selector (get_panel()):
   bl_label = "Shape Key Selector"
   bl_idname = "VIEW3D_PT_shape_key_selector"
   bl_space_type = 'VIEW_3D'
   bl_region_type = 'UI'
-  bl_category = 'Item'
+  bl_category = bl_category
 
   def draw(self, context):
     layout = self.layout

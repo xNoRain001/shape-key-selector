@@ -1,7 +1,7 @@
 bl_info = {
   "name": "Shape Key Selector",
   "blender": (4, 2, 3),
-  "category": "Object",
+  "category": "Shape Key Selector",
 }
 
 from .libs.blender_utils import register as utils_register, unregister as utils_unregister
